@@ -1,16 +1,22 @@
-import { NextRequest, NextResponse } from 'next/server';
+// app/api/notifications/[id]/route.ts
+import type { NextRequest } from 'next/server';
+import { NextResponse } from 'next/server';
 import dbConnect from '@/lib/mongodb';
 import Notification from '@/models/Notification';
 
+type Params = { id: string };
+
 export async function PUT(
-  request: NextRequest,
-  { params }: { params: { id: string } }
+  _request: NextRequest,
+  context: { params: Promise<Params> }
 ) {
   try {
     await dbConnect();
-    
+
+    const { id } = await context.params;
+
     const notification = await Notification.findByIdAndUpdate(
-      params.id,
+      id,
       { read: true },
       { new: true }
     );
@@ -22,26 +28,23 @@ export async function PUT(
       );
     }
 
-    return NextResponse.json({
-      success: true,
-      notification
-    });
-  } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: true, notification });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
 }
 
 export async function DELETE(
-  request: NextRequest,
-  { params }: { params: { id: string } }
+  _request: NextRequest,
+  context: { params: Promise<Params> }
 ) {
   try {
     await dbConnect();
-    
-    const notification = await Notification.findByIdAndDelete(params.id);
+
+    const { id } = await context.params;
+
+    const notification = await Notification.findByIdAndDelete(id);
 
     if (!notification) {
       return NextResponse.json(
@@ -50,14 +53,9 @@ export async function DELETE(
       );
     }
 
-    return NextResponse.json({
-      success: true,
-      message: 'Notification deleted'
-    });
-  } catch (error: any) {
-    return NextResponse.json(
-      { success: false, error: error.message },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: true, message: 'Notification deleted' });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
 }
