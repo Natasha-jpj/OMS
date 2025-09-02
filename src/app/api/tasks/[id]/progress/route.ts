@@ -1,105 +1,98 @@
-// app/api/tasks/[id]/route.ts
+// app/api/tasks/[id]/progress/route.ts
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { Types, HydratedDocument } from 'mongoose';
 import dbConnect from '@/lib/mongodb';
 import Task from '@/models/Task';
 
-type TaskStatus = 'pending' | 'in-progress' | 'completed' | 'cancelled';
+type Params = { id: string };
+type Ctx = { params: Params } | { params: Promise<Params> };
 
-type Progress = { message: string; timestamp: Date };
-
-interface ITaskMinimal {
-  _id: Types.ObjectId;
-  assignedTo: Types.ObjectId | string;
-  status: TaskStatus;
-  progressUpdates: Progress[];
+// Helper: during build, params may be a Promise
+function isPromise<T>(x: unknown): x is Promise<T> {
+  return !!x && typeof (x as Promise<T>).then === 'function';
 }
 
-function isObjectId(x: unknown): x is Types.ObjectId {
-  return !!x && typeof x === 'object' && typeof (x as Types.ObjectId).toString === 'function';
-}
+// Shape of a progress entry as stored on Task
+type Progress = {
+  message: string;
+  timestamp: Date | string; // lean() may return Date or serialized
+};
 
-/* -------------------- POST: add progress -------------------- */
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+// POST /api/tasks/[id]/progress  — add a progress entry (assignee only)
+export async function POST(request: NextRequest, context: Ctx) {
   try {
     await dbConnect();
+
+    const { id } = isPromise<Params>(context.params)
+      ? await context.params
+      : context.params;
 
     const userId = request.headers.get('x-user-id');
     if (!userId) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const body = await request.json();
-    const message: unknown = body?.message;
-    const status: unknown = body?.status;
+    const { message, status } = (await request.json()) as {
+      message?: string;
+      status?: 'pending' | 'in-progress' | 'completed' | 'cancelled';
+    };
 
-    if (typeof message !== 'string' || !message.trim()) {
+    if (!message || typeof message !== 'string') {
       return NextResponse.json({ success: false, error: 'Message is required' }, { status: 400 });
     }
 
-    // Need a mutable doc here (NOT lean)
-    const task = (await Task.findById(params.id)) as HydratedDocument<ITaskMinimal> | null;
-    if (!task) {
+    // Verify the requester is the assignee
+    const taskAssignee = await Task.findById(id).select('assignedTo').lean<{ assignedTo?: unknown } | null>();
+    if (!taskAssignee) {
       return NextResponse.json({ success: false, error: 'Task not found' }, { status: 404 });
     }
-
-    const assignee = isObjectId(task.assignedTo)
-      ? task.assignedTo.toString()
-      : String(task.assignedTo ?? '');
-
-    if (assignee !== userId) {
+    const isAssignee = (taskAssignee.assignedTo as { toString(): string } | undefined)?.toString() === userId;
+    if (!isAssignee) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 });
     }
 
-    // Ensure array exists (in case old docs missed the field)
-    if (!Array.isArray(task.progressUpdates)) task.progressUpdates = [];
-
-    task.progressUpdates.push({ message, timestamp: new Date() });
-
-    if (typeof status === 'string') {
-      // optionally validate against allowed statuses
-      task.status = status as TaskStatus;
+    // Push progress without mutating a hydrated doc (avoids typing issues)
+    const update: Record<string, unknown> = {
+      $push: { progressUpdates: { message, timestamp: new Date() } },
+    };
+    if (status) {
+      update.$set = { status };
     }
 
-    await task.save();
+    await Task.updateOne({ _id: id }, update);
 
-    return NextResponse.json(
-      { success: true, message: 'Progress update saved', task },
-      { status: 201 }
-    );
+    return NextResponse.json({ success: true });
   } catch (err) {
-    console.error('Error adding progress:', err);
-    return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 });
+    const msg = err instanceof Error ? err.message : 'Server error';
+    return NextResponse.json({ success: false, error: msg }, { status: 500 });
   }
 }
 
-/* -------------------- GET: list progress -------------------- */
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+// GET /api/tasks/[id]/progress  — list progress entries
+export async function GET(request: NextRequest, context: Ctx) {
   try {
     await dbConnect();
 
-    // With lean(), tell TS exactly what comes back
-    const task = await Task.findById(params.id)
-      .select({ progressUpdates: 1 })
-      .lean<{ _id: Types.ObjectId; progressUpdates: Progress[] } | null>();
+    const { id } = isPromise<Params>(context.params)
+      ? await context.params
+      : context.params;
+
+    const task = await Task.findById(id)
+      .select('progressUpdates')
+      .lean<{ progressUpdates?: Progress[] } | null>();
 
     if (!task) {
       return NextResponse.json({ success: false, error: 'Task not found' }, { status: 404 });
     }
 
-    return NextResponse.json(
-      { success: true, messages: task.progressUpdates ?? [] },
-      { status: 200 }
-    );
+    const messages: Progress[] = Array.isArray(task.progressUpdates)
+      ? task.progressUpdates
+      : [];
+
+    return NextResponse.json({ success: true, messages });
   } catch (err) {
-    console.error('Error fetching progress:', err);
-    return NextResponse.json({ success: false, error: 'Server error' }, { status: 500 });
+    const msg = err instanceof Error ? err.message : 'Server error';
+    return NextResponse.json({ success: false, error: msg }, { status: 500 });
   }
 }
