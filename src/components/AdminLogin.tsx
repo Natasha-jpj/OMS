@@ -3,56 +3,46 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-const AdminLogin = () => {
+export default function AdminLogin() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const router = useRouter();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
-    
-    // Get credentials from environment variables
-    const adminUsername = process.env.NEXT_PUBLIC_ADMIN_USERNAME;
-    const adminPassword = process.env.NEXT_PUBLIC_ADMIN_PASSWORD;
-    
-    if (username === adminUsername && password === adminPassword) {
-      router.push('/admin/dashboard');
+
+    const res = await fetch('/api/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+
+    if (res.ok) {
+      router.push('/admin/dashboard'); // ✅ cookie is already set
     } else {
-      setError('Invalid admin credentials');
+      const data = await res.json();
+      setError(data.error || 'Login failed');
     }
-  };
+  }
 
   return (
-    <div className="login-form">
-      <h2 style={{ textAlign: 'center', marginBottom: '20px' }}>Admin Login</h2>
-      <form onSubmit={handleSubmit}>
-        <div className="form-group">
-          <label htmlFor="admin-username">Username</label>
-          <input
-            type="text"
-            id="admin-username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            required
-          />
-        </div>
-        <div className="form-group">
-          <label htmlFor="admin-password">Password</label>
-          <input
-            type="password"
-            id="admin-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </div>
-        {error && <div style={{ color: 'red', marginBottom: '15px' }}>{error}</div>}
-        <button type="submit" className="submit-btn">Login as Admin</button>
-      </form>
-    </div>
+    <form onSubmit={handleSubmit}>
+      <h2>Admin Login</h2>
+      <input
+        value={username}
+        onChange={(e) => setUsername(e.target.value)}
+        placeholder="Username"
+      />
+      <input
+        type="password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        placeholder="Password"
+      />
+      <button type="submit">Login</button>
+      {error && <p style={{ color: 'red' }}>{error}</p>}
+    </form>
   );
-};
-
-export default AdminLogin;
+}
