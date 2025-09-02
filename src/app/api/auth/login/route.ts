@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import dbConnect from '@/lib/mongodb';
 import Employee from '@/models/Employee';
-import Role from '@/models/Role';                // <<< add this
+import Role from '@/models/Role';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
@@ -16,8 +16,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Email and password required' }, { status: 400 });
     }
 
-    // If your Employee.role is an ObjectId -> populate; if it's a string name -> lookup below.
-    // Try populate first; if you don't use refs, this will just leave it as-is.
     const employeeDoc = await Employee.findOne({ email }).populate('role');
     if (!employeeDoc) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
@@ -28,37 +26,32 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
     }
 
-    // Resolve role + permissions no matter how you store it
+    // Resolve role + permissions
     let roleName: string | undefined;
     let permissions: any = {};
 
-    // Case A: populated role object
-    // @ts-ignore
-    if (employeeDoc.role && typeof employeeDoc.role === 'object' && employeeDoc.role.name) {
-      // @ts-ignore
-      roleName = employeeDoc.role.name;
-      // @ts-ignore
-      permissions = employeeDoc.role.permissions || {};
+    if (employeeDoc.role && typeof employeeDoc.role === 'object' && 'name' in employeeDoc.role) {
+      roleName = (employeeDoc.role as any).name;
+      permissions = (employeeDoc.role as any).permissions || {};
     } else if (employeeDoc.role) {
-      // Case B: role is a string name stored on Employee
       const roleDoc = await Role.findOne({ name: employeeDoc.role as any });
       roleName = roleDoc?.name || (employeeDoc.role as any);
       permissions = roleDoc?.permissions || {};
     } else {
-      // Case C: no role set
       roleName = 'Employee';
       permissions = {};
     }
 
-    // Build JWT with role + permissions so APIs can authorize
+    // Build JWT
     const token = jwt.sign(
       { id: employeeDoc._id.toString(), email: employeeDoc.email, role: roleName, permissions },
       JWT_SECRET,
       { expiresIn: '1d' }
     );
 
-    return NextResponse.json({
-      token,
+    // ✅ Create response and set HttpOnly cookie
+    const res = NextResponse.json({
+      success: true,
       employee: {
         id: employeeDoc._id.toString(),
         name: employeeDoc.name,
@@ -68,6 +61,18 @@ export async function POST(request: NextRequest) {
         permissions,
       },
     });
+
+    res.cookies.set({
+      name: 'token',
+      value: token,
+      httpOnly: true,
+      secure: true,   // true in production (Vercel uses https)
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 60 * 60 * 24, // 1 day
+    });
+
+    return res;
   } catch (error: any) {
     return NextResponse.json(
       { error: 'Internal server error', details: error.message },

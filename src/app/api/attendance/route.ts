@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import dbConnect from '@/lib/mongodb';
-import Attendance from '@/models/Attendance';  // ✅ use Attendance, not Checkin
+import Attendance from '@/models/Attendance';
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
 
 export const config = {
   api: {
@@ -10,17 +13,25 @@ export const config = {
   },
 };
 
+// ---------------- POST ----------------
 export async function POST(request: NextRequest) {
   try {
     await dbConnect();
 
-    const body = await request.json();
+    // ✅ Check cookie for token
+    const token = request.cookies.get('token')?.value;
+    if (!token) {
+      return NextResponse.json({ error: 'User not logged in' }, { status: 401 });
+    }
 
-    console.log('API Received attendance data:', {
-      employeeId: body.employeeId,
-      type: body.type,
-      imageDataLength: body.imageData?.length || 0
-    });
+    let decoded: any;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch {
+      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+    }
+
+    const body = await request.json();
 
     if (!body.employeeId) {
       return NextResponse.json(
@@ -38,25 +49,18 @@ export async function POST(request: NextRequest) {
 
     const attendanceRecord = await Attendance.create({
       employeeId: body.employeeId,
-      employeeName: body.employeeName || 'Unknown Employee',
+      employeeName: body.employeeName || decoded.email || 'Unknown Employee',
       type: body.type,
       timestamp: new Date(),
       imageData: body.imageData || null,
     });
 
-    console.log('✅ Successfully created attendance record');
-
     return NextResponse.json(
-      { 
-        message: 'Attendance recorded successfully', 
-        data: attendanceRecord 
-      },
+      { message: 'Attendance recorded successfully', data: attendanceRecord },
       { status: 201 }
     );
-
   } catch (error: any) {
     console.error('API Error:', error);
-
     return NextResponse.json(
       { error: 'Internal server error: ' + error.message },
       { status: 500 }
@@ -64,22 +68,34 @@ export async function POST(request: NextRequest) {
   }
 }
 
-export async function GET() {
+// ---------------- GET ----------------
+export async function GET(request: NextRequest) {
   try {
     await dbConnect();
-    
+
+    // ✅ Check cookie for token
+    const token = request.cookies.get('token')?.value;
+    if (!token) {
+      return NextResponse.json({ error: 'User not logged in' }, { status: 401 });
+    }
+
+    try {
+      jwt.verify(token, JWT_SECRET);
+    } catch {
+      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+    }
+
     const records = await Attendance.find({})
       .sort({ timestamp: -1 })
       .limit(100)
       .lean();
-    
-    return NextResponse.json({ 
-      message: 'Records retrieved successfully', 
-      records 
+
+    return NextResponse.json({
+      message: 'Records retrieved successfully',
+      records,
     });
   } catch (error: any) {
     console.error('API Error:', error);
-
     return NextResponse.json(
       { error: 'Internal server error: ' + error.message },
       { status: 500 }
