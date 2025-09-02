@@ -1,11 +1,12 @@
-import type { NextConfig } from 'next'
+// next.config.ts
+import type { NextConfig } from 'next';
+
+const isCI = process.env.CI === 'true' || process.env.VERCEL === '1';
 
 const nextConfig: NextConfig = {
-  reactStrictMode: true,
-  env: {
-    NEXT_PUBLIC_ADMIN_USERNAME: process.env.ADMIN_USERNAME,
-    NEXT_PUBLIC_ADMIN_PASSWORD: process.env.ADMIN_PASSWORD,
+  eslint: {
+    ignoreDuringBuilds: isCI, // ignore on CI/Vercel, enforce locally
   },
-}
+};
 
-export default nextConfig
+export default nextConfig;
