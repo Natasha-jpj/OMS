@@ -40,14 +40,28 @@ function hasPermissions(x: unknown): x is { permissions?: Perms } {
 async function resolveRoleIdForEmployee(employeeId: string): Promise<string | null> {
   const emp = await Employee.findById(employeeId).populate('role').lean();
   if (!emp) return null;
+
   const roleValue = (emp as Record<string, unknown>).role;
-  if (hasId(roleValue)) return roleValue._id.toString();
-  if (typeof roleValue === 'string') {
-    const roleDoc = await Role.findOne({ name: roleValue }).lean();
-    return roleDoc?._id?.toString() ?? null;
+
+  // If it's already a populated doc with _id
+  if (roleValue && typeof roleValue === 'object' && roleValue !== null && '_id' in roleValue) {
+    // _id has toString on ObjectId
+    return (roleValue as { _id: { toString(): string } })._id.toString();
   }
+
+  // If it's a role name string, look up the role and return its _id as string
+  if (typeof roleValue === 'string') {
+    // 👇 Tell TS exactly what lean() will return
+    const roleDoc = await Role.findOne({ name: roleValue })
+      .select('_id')
+      .lean<{ _id: { toString(): string } } | null>();
+
+    return roleDoc ? roleDoc._id.toString() : null;
+  }
+
   return null;
 }
+
 
 // PUT /api/tasks/[id]
 export async function PUT(request: NextRequest, context: Ctx) {
