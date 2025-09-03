@@ -19,18 +19,32 @@ export default function Login() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
+        // credentials: 'include' // not required for same-origin, OK to leave out
       });
 
       const data = await res.json();
 
-      if (!res.ok) {
-        setError(data.error || 'Login failed');
+      if (!res.ok || !data?.success) {
+        setError(data?.error || 'Login failed');
         return;
       }
 
-      localStorage.setItem('token', data.token);
-      localStorage.setItem('employee', JSON.stringify(data.employee));
-      localStorage.setItem('permissions', JSON.stringify(data.employee.permissions));
+      // ★ Save the employee (with permissions) for the dashboard/attendance pages
+      localStorage.setItem(
+        'employee',
+        JSON.stringify({
+          id: data.employee.id,
+          name: data.employee.name,
+          email: data.employee.email,
+          position: data.employee.position,
+          role: data.employee.role,
+          permissions: data.employee.permissions || {},
+        })
+      );
+
+      // Optional: you can keep these, but `token` won’t be present (your API uses an HttpOnly cookie)
+      localStorage.setItem('permissions', JSON.stringify(data.employee.permissions || {}));
+      if (data.token) localStorage.setItem('token', data.token);
 
       router.push('/dashboard');
     } catch (err: any) {
@@ -53,6 +67,7 @@ export default function Login() {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="Enter your email"
               required
+              autoComplete="username"
             />
           </div>
           <div className="form-group">
@@ -64,16 +79,19 @@ export default function Login() {
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Enter your password"
               required
+              autoComplete="current-password"
             />
           </div>
           {error && <p className="error-text">{error}</p>}
           <button type="submit" className="submit-btn">Login</button>
         </form>
-        
+
         <div className="admin-link">
           <Link href="/admin">Admin Login</Link>
         </div>
       </div>
+
+
 
       <style jsx>{`
         .login-container {
