@@ -4,6 +4,10 @@ import dbConnect from '@/lib/mongodb';
 import Task from '@/models/Task';
 import Employee from '@/models/Employee';
 
+export const runtime = 'nodejs';
+export const revalidate = 0;           // (optional) ensure no caching issues
+export const dynamic = 'force-dynamic';
+
 interface FlatUpdate {
   taskId: string;
   taskTitle: string;
