@@ -6,16 +6,15 @@ import Attendance from '@/models/Attendance';
 import Employee from '@/models/Employee';
 
 export const runtime = 'nodejs';
-
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret_change_me';
 
 function requireAdmin(req: NextRequest) {
   const token = req.cookies.get('admin_token')?.value;
   if (!token) return { ok: false as const, error: 'Unauthorized' };
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { role: string; username: string };
-    if (payload.role !== 'Admin') return { ok: false as const, error: 'Forbidden' };
-    return { ok: true as const, admin: payload };
+    const p = jwt.verify(token, JWT_SECRET) as { role: string; username: string };
+    if (p.role !== 'Admin') return { ok: false as const, error: 'Forbidden' };
+    return { ok: true as const, admin: p };
   } catch {
     return { ok: false as const, error: 'Invalid token' };
   }
@@ -23,9 +22,7 @@ function requireAdmin(req: NextRequest) {
 
 export async function GET(request: NextRequest) {
   const auth = requireAdmin(request);
-  if (!auth.ok) {
-    return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
-  }
+  if (!auth.ok) return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
 
   try {
     await dbConnect();
@@ -36,26 +33,21 @@ export async function GET(request: NextRequest) {
     const employeeId = searchParams.get('employeeId') || undefined;
 
     const skip = (page - 1) * limit;
-
     const query: Record<string, unknown> = {};
     if (employeeId) query.employeeId = employeeId;
 
     const total = await Attendance.countDocuments(query);
 
-    // Try with populate first
+    // fetch rows; populate if available
     let rows: any[];
     try {
       rows = await Attendance.find(query)
-        .populate('employeeId', 'name email position') // requires model name "Employee"
+        .populate('employeeId', 'name email position') // ref MUST be "Employee"
         .sort({ timestamp: -1 })
         .skip(skip)
         .limit(limit)
         .lean();
-    } catch (e: any) {
-      // If populate target isn't registered, retry without populate
-      const isMissingModel = /MissingSchemaError/i.test(String(e?.name)) || /Schema hasn'?t been registered/i.test(String(e?.message));
-      if (!isMissingModel) throw e;
-
+    } catch {
       rows = await Attendance.find(query)
         .sort({ timestamp: -1 })
         .skip(skip)
@@ -63,20 +55,41 @@ export async function GET(request: NextRequest) {
         .lean();
     }
 
-    const attendance = rows.map((rec: any) => {
-      let eid: string | undefined;
-      let ename: string | null = null;
-
-      if (rec.employeeId && typeof rec.employeeId === 'object') {
-        eid = rec.employeeId._id?.toString?.() ?? rec.employeeId.toString?.();
-        ename = rec.employeeId.name ?? null;
-      } else if (rec.employeeId != null) {
-        eid = String(rec.employeeId);
+    // collect ids that still lack a name
+    const idsNeedingName = new Set<string>();
+    for (const rec of rows) {
+      const hasName = rec?.employeeId && typeof rec.employeeId === 'object' && rec.employeeId?.name;
+      if (!hasName && rec.employeeId != null) {
+        const id =
+          rec.employeeId?._id?.toString?.() ??
+          (typeof rec.employeeId === 'object' ? rec.employeeId.toString?.() : String(rec.employeeId));
+        if (id) idsNeedingName.add(String(id));
       }
+    }
+
+    // lookup names once
+    const nameMap = new Map<string, string>();
+    if (idsNeedingName.size) {
+      const emps = await Employee.find(
+        { _id: { $in: Array.from(idsNeedingName) } },
+        { name: 1 }
+      ).lean();
+      emps.forEach((e: any) => nameMap.set(String(e._id), String(e.name ?? '')));
+    }
+
+    const attendance = rows.map((rec: any) => {
+      const eid =
+        rec.employeeId?._id?.toString?.() ??
+        (typeof rec.employeeId === 'object' ? rec.employeeId.toString?.() : String(rec.employeeId));
+
+      const ename =
+        (rec.employeeId && typeof rec.employeeId === 'object' ? rec.employeeId.name : null) ||
+        (eid ? nameMap.get(String(eid)) : '') ||
+        'Unknown';
 
       return {
-        _id: rec._id,
-        employeeId: eid,
+        _id: String(rec._id),
+        employeeId: String(eid ?? ''),
         employeeName: ename,
         type: rec.type,
         timestamp: rec.timestamp,
