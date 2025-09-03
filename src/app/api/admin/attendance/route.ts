@@ -21,7 +21,6 @@ function requireAdmin(req: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
-  // 🔐 guard
   const auth = requireAdmin(request);
   if (!auth.ok) {
     return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
@@ -31,8 +30,8 @@ export async function GET(request: NextRequest) {
     await dbConnect();
 
     const { searchParams } = new URL(request.url);
-    const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
-    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '10', 10)));
+    const page  = Math.max(1, parseInt(searchParams.get('page')  || '1', 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '10', 10) || 10));
     const employeeId = searchParams.get('employeeId') || undefined;
 
     const skip = (page - 1) * limit;
@@ -42,25 +41,51 @@ export async function GET(request: NextRequest) {
 
     const total = await Attendance.countDocuments(query);
 
-    const attendance = await Attendance.find(query)
-      .populate('employeeId', 'name email position')
-      .sort({ timestamp: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
+    // Try with populate first
+    let rows: any[];
+    try {
+      rows = await Attendance.find(query)
+        .populate('employeeId', 'name email position') // requires model name "Employee"
+        .sort({ timestamp: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean();
+    } catch (e: any) {
+      // If populate target isn't registered, retry without populate
+      const isMissingModel = /MissingSchemaError/i.test(String(e?.name)) || /Schema hasn'?t been registered/i.test(String(e?.message));
+      if (!isMissingModel) throw e;
 
-    const records = attendance.map((record: any) => ({
-      _id: record._id,
-      employeeId: record.employeeId?._id,
-      employeeName: record.employeeId?.name,
-      type: record.type,
-      timestamp: record.timestamp,
-      imageData: record.imageData ?? null,
-    }));
+      rows = await Attendance.find(query)
+        .sort({ timestamp: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean();
+    }
+
+    const attendance = rows.map((rec: any) => {
+      let eid: string | undefined;
+      let ename: string | null = null;
+
+      if (rec.employeeId && typeof rec.employeeId === 'object') {
+        eid = rec.employeeId._id?.toString?.() ?? rec.employeeId.toString?.();
+        ename = rec.employeeId.name ?? null;
+      } else if (rec.employeeId != null) {
+        eid = String(rec.employeeId);
+      }
+
+      return {
+        _id: rec._id,
+        employeeId: eid,
+        employeeName: ename,
+        type: rec.type,
+        timestamp: rec.timestamp,
+        imageData: rec.imageData ?? null,
+      };
+    });
 
     return NextResponse.json({
       success: true,
-      attendance: records,
+      attendance,
       totalPages: Math.ceil(total / limit),
       currentPage: page,
       total,
@@ -68,7 +93,7 @@ export async function GET(request: NextRequest) {
   } catch (error: any) {
     console.error('GET /api/admin/attendance - Error:', error);
     return NextResponse.json(
-      { success: false, error: 'Internal server error', details: error.message },
+      { success: false, error: 'Internal server error', details: error?.message ?? String(error) },
       { status: 500 }
     );
   }
