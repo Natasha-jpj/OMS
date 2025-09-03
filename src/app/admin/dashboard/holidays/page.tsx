@@ -150,6 +150,14 @@ const getUserId = () => {
   }
 };
 
+const authHeaders = (): HeadersInit => {
+  const h = new Headers();
+  const uid = getUserId();
+  if (uid) h.set('x-user-id', String(uid));
+  return h;
+};
+
+
   const fetchHolidays = async () => {
     try {
       setLoading(true);
@@ -172,16 +180,21 @@ const fetchRecentProgress = async () => {
   try {
     setProgLoading(true);
     setProgError(null);
-    const res = await fetch('/api/tasks/progress?limit=50');
+// Usage (don’t spread):
+const res = await fetch('/api/tasks/progress?limit=50', {
+  headers: authHeaders(),
+});
     if (!res.ok) throw new Error('Failed to load recent progress updates');
     const data = await res.json();
 
-    // ADD:
     console.log('Recent progress API:', data);
-    setLastQueryInfo(`Recent (${Array.isArray(data.updates) ? data.updates.length : 0})`);
+    setLastQueryInfo(
+      `Recent (${Array.isArray(data.updates) ? data.updates.length : 0})`
+    );
 
-    setProgressList(Array.isArray(data.updates) ? data.updates : []);
-    setRecentList(Array.isArray(data.updates) ? data.updates : []); // ADD
+    const rows = Array.isArray(data.updates) ? data.updates : [];
+    setProgressList(rows);
+    setRecentList(rows);
   } catch (e: any) {
     const msg = e?.message || 'Failed to load progress updates';
     setProgError(msg);
@@ -190,6 +203,7 @@ const fetchRecentProgress = async () => {
     setProgLoading(false);
   }
 };
+
 
 
 // Fetch progress for a specific YYYY-MM-DD
@@ -197,13 +211,17 @@ const fetchProgressForDate = async (isoDay: string) => {
   try {
     setProgLoading(true);
     setProgError(null);
-    const res = await fetch(`/api/tasks/progress?date=${isoDay}&limit=200`);
+    const res = await fetch(
+      `/api/tasks/progress?date=${encodeURIComponent(isoDay)}&limit=200`,
+      { headers: { ...authHeaders() } }
+    );
     if (!res.ok) throw new Error('Failed to load progress updates for day');
     const data = await res.json();
 
-    // ADD:
     console.log('Date progress API:', isoDay, data);
-    setLastQueryInfo(`${isoDay} (${Array.isArray(data.updates) ? data.updates.length : 0})`);
+    setLastQueryInfo(
+      `${isoDay} (${Array.isArray(data.updates) ? data.updates.length : 0})`
+    );
 
     setProgressList(Array.isArray(data.updates) ? data.updates : []);
   } catch (e: any) {
@@ -214,7 +232,6 @@ const fetchProgressForDate = async (isoDay: string) => {
     setProgLoading(false);
   }
 };
-
 
 
   useEffect(() => {
@@ -278,22 +295,23 @@ const fetchProgressForDate = async (isoDay: string) => {
   };
 
   const handleDateClick = (date: Date) => {
-    // Normalize to a stable UTC day key (YYYY-MM-DD)
-    const normalized = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
-      .toISOString()
-      .split('T')[0];
+  const normalized = new Date(
+    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
+  )
+    .toISOString()
+    .split('T')[0];
 
-    setSelectedDate(date);
-    // Load all employees' progress for that day
-    fetchProgressForDate(normalized);
+  setSelectedDate(date);
+  setProgressList([]);          // <- clear to show proper loading state
+  setProgError(null);
+  setLastQueryInfo('');         // optional: will be set after fetch
+  fetchProgressForDate(normalized);
 
-    // Your existing holiday toggle behavior
-    const existing = holidays.find((h) => h.date.startsWith(normalized));
-    if (existing) {
-      if (confirm('Remove holiday for this date?')) removeHoliday(existing._id);
-    }
-  };
-
+  const existing = holidays.find((h) => h.date.startsWith(normalized));
+  if (existing) {
+    if (confirm('Remove holiday for this date?')) removeHoliday(existing._id);
+  }
+};
   const isMarked = (date: Date) => {
     const normalized = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
       .toISOString()
