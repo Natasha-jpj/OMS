@@ -1,11 +1,12 @@
+// app/api/admin/login/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret_change_me';
-
-// we'll verify against your existing public envs for now
 const ADMIN_USER = process.env.ADMIN_USERNAME;
 const ADMIN_PASS = process.env.ADMIN_PASSWORD;
+
+export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
   const { username, password } = await req.json();
@@ -14,10 +15,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Invalid credentials' }, { status: 401 });
   }
 
-  // create JWT
   const token = jwt.sign({ role: 'Admin', username }, JWT_SECRET, { expiresIn: '1d' });
 
-  // set httpOnly cookie
   const res = NextResponse.json({ success: true });
   res.cookies.set('admin_token', token, {
     httpOnly: true,
@@ -27,4 +26,6 @@ export async function POST(req: NextRequest) {
     maxAge: 60 * 60 * 24, // 1 day
   });
   return res;
+  await fetch('/api/admin/attendance', { cache: 'no-store' });
+
 }

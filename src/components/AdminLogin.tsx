@@ -1,3 +1,4 @@
+// components/AdminLogin.tsx
 'use client';
 
 import { useState } from 'react';
@@ -21,27 +22,18 @@ export default function AdminLogin() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
-
       const data = await res.json();
 
-      if (!res.ok || !data?.admin?._id) {
+      if (!res.ok || !data?.success) {
         setError(data?.error || 'Invalid credentials');
-        setSubmitting(false);
         return;
       }
 
-      // ✅ Save for client-side fetch headers
-      localStorage.setItem(
-        'employee',
-        JSON.stringify({ id: data.admin._id, name: data.admin.name ?? 'Admin' })
-      );
-
-      // (optional) cookie so server routes can also read it
-      document.cookie = `employeeId=${data.admin._id}; path=/; SameSite=Lax`;
-
-      router.push('/admin/dashboard');
+      // Cookie is set by the API (HttpOnly)
+      router.replace('/admin/dashboard');
     } catch (err: any) {
       setError(err?.message || 'Login failed');
+    } finally {
       setSubmitting(false);
     }
   };
@@ -49,38 +41,10 @@ export default function AdminLogin() {
   return (
     <form onSubmit={onSubmit}>
       <label htmlFor="username">Admin Login</label>
-      <input
-        id="username"
-        name="username"
-        autoComplete="username"
-        placeholder="Admin username"
-        value={username}
-        onChange={(e) => setUsername(e.target.value)}
-        disabled={submitting}
-        required
-      />
-
-      <input
-        id="password"
-        name="password"
-        type="password"
-        autoComplete="current-password"
-        placeholder="••••"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        disabled={submitting}
-        required
-      />
-
-      <button type="submit" disabled={submitting}>
-        {submitting ? 'Signing in…' : 'Login'}
-      </button>
-
-      {error && (
-        <div style={{ marginTop: 12, color: '#f87171', fontWeight: 600 }}>
-          {error}
-        </div>
-      )}
+      <input id="username" value={username} onChange={e=>setUsername(e.target.value)} autoComplete="username" required />
+      <input id="password" type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" required />
+      <button disabled={submitting} type="submit">{submitting ? 'Signing in…' : 'Login'}</button>
+      {error && <div style={{marginTop:12,color:'#f87171',fontWeight:600}}>{error}</div>}
     </form>
   );
 }
