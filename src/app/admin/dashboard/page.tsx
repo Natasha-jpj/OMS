@@ -1,21 +1,20 @@
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-import jwt from "jsonwebtoken";
+// app/admin/dashboard/page.tsx
+import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation';
+import ClientDashboard from './ClientDashboard';
 
-const JWT_SECRET = process.env.JWT_SECRET || "supersecret_change_me";
+export const runtime = 'nodejs'; // ensure Node (safer for jwt/cookies)
 
 export default async function Page() {
-  // await here 👇
-  const cookieStore = await cookies();
-  const token = cookieStore.get("admin_token")?.value;
+  // Some Next versions return a sync store; others return a Promise on Edge.
+  // This form works in both. The ts-ignore avoids noisy types on older versions.
+  // @ts-ignore
+  const store = await cookies();
+  const token = store?.get('admin_token')?.value;
 
-  if (!token) redirect("/admin");
-
-  try {
-    jwt.verify(token, JWT_SECRET);
-  } catch {
-    redirect("/admin");
+  if (!token) {
+    redirect('/admin'); // send to admin login
   }
 
-  return <div>Admin Dashboard here…</div>;
+  return <ClientDashboard />;
 }
