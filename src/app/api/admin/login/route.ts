@@ -4,8 +4,8 @@ import jwt from 'jsonwebtoken';
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret_change_me';
 
 // we'll verify against your existing public envs for now
-const ADMIN_USER = process.env.NEXT_PUBLIC_ADMIN_USERNAME;
-const ADMIN_PASS = process.env.NEXT_PUBLIC_ADMIN_PASSWORD;
+const ADMIN_USER = process.env.ADMIN_USERNAME;
+const ADMIN_PASS = process.env.ADMIN_PASSWORD;
 
 export async function POST(req: NextRequest) {
   const { username, password } = await req.json();
