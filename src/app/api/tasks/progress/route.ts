@@ -4,10 +4,6 @@ import dbConnect from '@/lib/mongodb';
 import Task from '@/models/Task';
 import Employee from '@/models/Employee';
 
-export const runtime = 'nodejs';
-export const revalidate = 0;           // (optional) ensure no caching issues
-export const dynamic = 'force-dynamic';
-
 interface FlatUpdate {
   taskId: string;
   taskTitle: string;
@@ -61,11 +57,11 @@ if (startISO && endISO) {
 
     const baseQuery: any = { 'progressUpdates.0': { $exists: true } };
 
-    // if (dayStart && dayEnd) {
-    //   baseQuery.progressUpdates = {
-    //     $elemMatch: { timestamp: { $gte: dayStart, $lt: dayEnd } },
-    //   };
-    // }
+    if (dayStart && dayEnd) {
+      baseQuery.progressUpdates = {
+        $elemMatch: { timestamp: { $gte: dayStart, $lt: dayEnd } },
+      };
+    }
 
     const tasks = await Task.find(baseQuery)
       .select('title assignedTo progressUpdates')
@@ -73,22 +69,24 @@ if (startISO && endISO) {
 
     // Flatten
     const flat: FlatUpdate[] = tasks.flatMap((t: any) => {
-  const updates = Array.isArray(t.progressUpdates) ? t.progressUpdates : [];
-  const filtered = (dayStart && dayEnd)
-    ? updates.filter((u: any) => {
-        const ts = new Date(u.timestamp); // works if stored as ISO string
-        return ts >= dayStart! && ts < dayEnd!;
-      })
-    : updates;
+      const updates = Array.isArray(t.progressUpdates) ? t.progressUpdates : [];
+      const filtered = (dayStart && dayEnd)
+        ? updates.filter((u: any) => {
+            const ts = new Date(u.timestamp);
+            return ts >= dayStart! && ts < dayEnd!;
+          })
+        : updates;
 
-  return filtered.map((u: any): FlatUpdate => ({
-    taskId: String(t._id),
-    taskTitle: t.title,
-    assignedTo: t.assignedTo,
-    message: u.message,
-    timestamp: new Date(u.timestamp),
-  }));
-});
+      return filtered.map(
+        (u: any): FlatUpdate => ({
+          taskId: String(t._id),
+          taskTitle: t.title,
+          assignedTo: t.assignedTo,
+          message: u.message,
+          timestamp: new Date(u.timestamp),
+        })
+      );
+    });
 
     // Collect employee ids
     const assigneeIds = Array.from(

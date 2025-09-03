@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import dbConnect from '@/lib/mongodb';
 import Attendance from '@/models/Attendance';
 import Task from '@/models/Task';
-import Employee from '@/models/Employee'; // required so populate works
+import Employee from '@/models/Employee';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,6 +31,7 @@ function dayRangeUTC(yyyy_mm_dd: string) {
 }
 
 export async function GET(req: NextRequest) {
+  // auth
   const auth = requireAdmin(req);
   if (!auth.ok) {
     return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
@@ -48,27 +49,64 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // -------- Attendance (that day, UTC) --------
-    const attRows = await Attendance.find({
-      timestamp: { $gte: range.start, $lte: range.end },
-    })
-      .populate('employeeId', 'name') // requires model name "Employee"
-      .sort({ timestamp: 1 })
-      .lean();
+    /* ---------------- Attendance (no populate; manual join) ---------------- */
+    let attendance: Array<{
+      _id: string;
+      employeeId: string;
+      employeeName: string;
+      type: 'checkin' | 'checkout';
+      timestamp: Date;
+      imageData: string | null;
+      createdAt: Date | undefined;
+    }> = [];
 
-    const attendance = (attRows as any[]).map((a) => ({
-      _id: String(a._id),
-      employeeId:
-        a.employeeId?._id?.toString?.() ??
-        (typeof a.employeeId === 'object' ? a.employeeId.toString?.() : String(a.employeeId)),
-      employeeName: a.employeeId?.name ?? 'Unknown',
-      type: a.type as 'checkin' | 'checkout',
-      timestamp: a.timestamp,
-      imageData: a.imageData ?? null,
-      createdAt: a.createdAt,
-    }));
+    try {
+      const attRows = await Attendance.find(
+        { timestamp: { $gte: range.start, $lte: range.end } },
+        { employeeId: 1, type: 1, timestamp: 1, imageData: 1, createdAt: 1 }
+      ).sort({ timestamp: 1 }).lean();
 
-    // -------- Progress updates (best-effort, won’t crash) --------
+      const empIds = Array.from(
+        new Set(
+          attRows
+            .map((a: any) =>
+              a.employeeId?._id?.toString?.() ??
+              (typeof a.employeeId === 'object' ? a.employeeId.toString?.() : String(a.employeeId))
+            )
+            .filter(Boolean)
+        )
+      );
+
+      const employees = await Employee.find(
+        { _id: { $in: empIds } },
+        { name: 1 }
+      ).lean();
+
+      const nameMap = new Map<string, string>();
+      for (const e of employees as any[]) {
+        nameMap.set(String(e._id), String(e.name ?? 'Unknown'));
+      }
+
+      attendance = (attRows as any[]).map((a) => {
+        const id =
+          a.employeeId?._id?.toString?.() ??
+          (typeof a.employeeId === 'object' ? a.employeeId.toString?.() : String(a.employeeId));
+        return {
+          _id: String(a._id),
+          employeeId: String(id),
+          employeeName: nameMap.get(String(id)) ?? 'Unknown',
+          type: a.type,
+          timestamp: a.timestamp,
+          imageData: a.imageData ?? null,
+          createdAt: a.createdAt,
+        };
+      });
+    } catch (attErr) {
+      console.error('Daily report: attendance query failed:', attErr);
+      attendance = [];
+    }
+
+    /* ---------------- Progress updates (best effort) ---------------- */
     let progress: Array<{
       taskId: string;
       taskTitle: string;
@@ -82,28 +120,43 @@ export async function GET(req: NextRequest) {
       const taskRows = await Task.find(
         { 'progressUpdates.timestamp': { $gte: range.start, $lte: range.end } },
         { title: 1, assignedTo: 1, progressUpdates: 1 }
-      )
-        .populate('assignedTo', 'name')
-        .lean();
+      ).lean();
+
+      // fetch assignee names in one go
+      const assigneeIds = Array.from(
+        new Set(
+          (taskRows as any[]).map((t) =>
+            t.assignedTo?._id?.toString?.() ??
+            (typeof t.assignedTo === 'object' ? t.assignedTo.toString?.() : String(t.assignedTo))
+          )
+        )
+      ).filter(Boolean);
+
+      const assignees = await Employee.find({ _id: { $in: assigneeIds } }, { name: 1 }).lean();
+      const assigneeNameMap = new Map<string, string>();
+      for (const e of assignees as any[]) {
+        assigneeNameMap.set(String(e._id), String(e.name ?? 'Employee'));
+      }
 
       for (const t of taskRows as any[]) {
         const taskTitle = t.title ?? 'Task';
         const assignedToId =
           t.assignedTo?._id?.toString?.() ??
           (typeof t.assignedTo === 'object' ? t.assignedTo.toString?.() : String(t.assignedTo));
-        const assignedToName = t.assignedTo?.name ?? 'Employee';
+        const assignedToName = assigneeNameMap.get(String(assignedToId)) ?? 'Employee';
 
         if (Array.isArray(t.progressUpdates)) {
           for (const u of t.progressUpdates) {
-            const tsNum = new Date(u?.timestamp).getTime();
-            if (!Number.isNaN(tsNum) && tsNum >= range.start.getTime() && tsNum <= range.end.getTime()) {
+            const time = new Date(u?.timestamp);
+            if (!Number.isNaN(time.getTime()) &&
+                time >= range.start && time <= range.end) {
               progress.push({
                 taskId: String(t._id),
                 taskTitle,
                 assignedTo: String(assignedToId),
                 employeeName: assignedToName,
                 message: String(u?.message ?? ''),
-                timestamp: new Date(tsNum).toISOString(),
+                timestamp: time.toISOString(),
               });
             }
           }
@@ -111,8 +164,8 @@ export async function GET(req: NextRequest) {
       }
 
       progress.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-    } catch (err) {
-      console.error('Daily report: progress scan failed (returning empty list):', err);
+    } catch (progErr) {
+      console.error('Daily report: progress scan failed (returning empty list):', progErr);
       progress = [];
     }
 
