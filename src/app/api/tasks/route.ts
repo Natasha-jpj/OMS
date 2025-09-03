@@ -9,7 +9,6 @@ import Role from '@/models/Role';
 export const runtime = 'nodejs';
 
 // ---- Auth / Perms ---------------------------------------------------
-
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret_change_me';
 
 type Perms = {
@@ -36,17 +35,16 @@ function hasObjId(x: unknown): x is { _id: { toString(): string } } {
   return typeof x === 'object' && x !== null && '_id' in x;
 }
 
-/**
- * Returns one of:
+/** Identify caller:
  *  - { kind: 'admin', username }
  *  - { kind: 'employee', userId }
- *  - null if unauthenticated
+ *  - null
  */
 function identifyCaller(req: NextRequest):
   | { kind: 'admin'; username: string }
   | { kind: 'employee'; userId: string }
   | null {
-  // 1) Admin via JWT cookie
+  // Admin via JWT cookie
   const adminToken = req.cookies.get('admin_token')?.value;
   if (adminToken) {
     try {
@@ -55,11 +53,11 @@ function identifyCaller(req: NextRequest):
         return { kind: 'admin', username: payload.username };
       }
     } catch {
-      // ignore and fall through to employee
+      /* fall through */
     }
   }
 
-  // 2) Employee via explicit header (preferred) or cookie (legacy)
+  // Employee via header or cookie
   const fromHeader = req.headers.get('x-user-id');
   if (fromHeader) return { kind: 'employee', userId: fromHeader };
 
@@ -72,7 +70,6 @@ function identifyCaller(req: NextRequest):
 async function getUserRole(userId: string): Promise<RoleLean> {
   const employee = await Employee.findById(userId).populate('role').lean();
 
-  // Populated role (ObjectId -> Role doc)
   const roleValue = isRecord(employee) ? (employee as Record<string, unknown>)['role'] : null;
 
   if (roleValue && isRecord(roleValue) && hasObjId(roleValue)) {
@@ -83,7 +80,6 @@ async function getUserRole(userId: string): Promise<RoleLean> {
     };
   }
 
-  // Role saved as a string name
   if (typeof roleValue === 'string') {
     const roleDoc = await Role.findOne({ name: roleValue }).lean();
     if (roleDoc) {
@@ -118,7 +114,6 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const assignedToParam = searchParams.get('assignedTo') || undefined;
 
-    // Admin can view all tasks
     if (caller.kind === 'admin') {
       const query: Record<string, unknown> = {};
       if (assignedToParam) query.assignedTo = assignedToParam;
@@ -127,7 +122,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: true, tasks });
     }
 
-    // Employee: role/permission-based visibility
+    // Employee path (permissions)
     const userId = caller.userId;
     const roleDoc = await getUserRole(userId);
     if (!roleDoc) {
@@ -144,7 +139,6 @@ export async function GET(request: NextRequest) {
     } else if (canViewSome) {
       const orConditions: Array<Record<string, unknown>> = [{ assignedTo: userId }];
 
-      // If we have a role _id, include role-based visibility
       if (roleDoc._id) {
         const roleIdStr = typeof roleDoc._id === 'string' ? roleDoc._id : roleDoc._id.toString();
         orConditions.push({ role: roleIdStr });
@@ -176,7 +170,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    // (Optional) Only admins or users with canAssignTasks should be able to create tasks.
+    // Only admins or users with canAssignTasks may create
     if (caller.kind !== 'admin') {
       const roleDoc = await getUserRole(caller.userId);
       if (!roleDoc?.permissions?.canAssignTasks) {
@@ -188,11 +182,6 @@ export async function POST(request: NextRequest) {
     const body = isRecord(raw) ? (raw as Record<string, unknown>) : {};
 
     const title = typeof body.title === 'string' ? body.title.trim() : '';
-    const assignedBy = typeof body.assignedBy === 'string'
-      ? body.assignedBy
-      : caller.kind === 'employee'
-        ? caller.userId
-        : 'admin';
     const assignedTo = typeof body.assignedTo === 'string' ? body.assignedTo : '';
     const dueDate = parseDateMaybe(body.dueDate);
     const description = typeof body.description === 'string' ? body.description : '';
@@ -205,14 +194,20 @@ export async function POST(request: NextRequest) {
         ? body.status
         : 'pending';
 
-    if (!title || !assignedBy || !assignedTo || !dueDate) {
+    // assignedBy comes from the caller, not the client body
+    const assignedBy =
+      caller.kind === 'admin'
+        ? (caller.username || 'Admin')
+        : caller.userId;
+
+    if (!title || !assignedTo || !dueDate) {
       return NextResponse.json(
-        { success: false, error: 'Title, assignedBy, assignedTo, and valid dueDate are required' },
+        { success: false, error: 'Title, assignedTo, and valid dueDate are required' },
         { status: 400 }
       );
     }
 
-    // Resolve the assignee's role to a Role _id (string)
+    // Resolve assignee role to Role _id (string)
     const assignedEmployee = await Employee.findById(assignedTo).populate('role').lean();
     let roleId: string | null = null;
 
@@ -230,9 +225,9 @@ export async function POST(request: NextRequest) {
     const task = await Task.create({
       title,
       description,
-      assignedBy,
+      assignedBy,       // ✅ from cookie/header
       assignedTo,
-      role: roleId, // store Role _id when possible
+      role: roleId,
       priority,
       status,
       dueDate,

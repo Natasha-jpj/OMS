@@ -1,40 +1,55 @@
 import { NextRequest, NextResponse } from 'next/server';
+import jwt from 'jsonwebtoken';
 import dbConnect from '@/lib/mongodb';
 import BroadcastMessage from '@/models/BroadcastMessage';
 import Employee from '@/models/Employee';
 
+export const runtime = 'nodejs';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'supersecret_change_me';
+
+function requireAdmin(req: NextRequest) {
+  const token = req.cookies.get('admin_token')?.value;
+  if (!token) return { ok: false as const, error: 'Unauthorized' };
+  try {
+    const p = jwt.verify(token, JWT_SECRET) as { role: string; username: string };
+    if (p?.role !== 'Admin') return { ok: false as const, error: 'Forbidden' };
+    return { ok: true as const, username: p.username };
+  } catch {
+    return { ok: false as const, error: 'Invalid token' };
+  }
+}
+
 export async function POST(req: NextRequest) {
+  // 🔐 admin only
+  const auth = requireAdmin(req);
+  if (!auth.ok) return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
+
   try {
     await dbConnect();
 
-    const userId = req.headers.get('x-user-id');
-    if (!userId) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-
-    const payload = await req.json();
-    const subject = String(payload.subject || '').trim();
-    const body = String(payload.body || '').trim();
-    const urgent = !!payload.urgent;
-
-    if (!subject || !body) {
+    const { subject = '', body = '', urgent = false } = await req.json();
+    const subj = String(subject).trim();
+    const msg  = String(body).trim();
+    if (!subj || !msg) {
       return NextResponse.json({ success: false, error: 'Subject and body are required' }, { status: 400 });
     }
 
-    // Get all employee IDs as recipients
-    const allEmployees = await Employee.find({}, { _id: 1 }).lean();
-    const recipients = allEmployees.map((e:any) => e._id);
+    // recipients = all employees
+    const all = await Employee.find({}, { _id: 1 }).lean();
+    const recipients = all.map((e: any) => e._id);
 
     await BroadcastMessage.create({
-      subject,
-      body,
-      urgent,
-      createdBy: userId,
+      subject: subj,
+      body: msg,
+      urgent: !!urgent,
+      createdByName: auth.username ?? 'Admin', // optional metadata
       recipients,
     });
 
-    // (Optional) You could also insert Notification docs per user here.
-
     return NextResponse.json({ success: true }, { status: 201 });
-  } catch (e:any) {
-    return NextResponse.json({ success: false, error: e.message || 'Failed to send' }, { status: 500 });
+  } catch (e: any) {
+    console.error('POST /api/messages/broadcast error:', e);
+    return NextResponse.json({ success: false, error: e?.message || 'Failed to send' }, { status: 500 });
   }
 }

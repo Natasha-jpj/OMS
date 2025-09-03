@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
 import dbConnect from '@/lib/mongodb';
 import Attendance from '@/models/Attendance';
+import Employee from '@/models/Employee';
 
 export const runtime = 'nodejs';
 
