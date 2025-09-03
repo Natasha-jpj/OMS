@@ -1,26 +1,30 @@
-import mongoose, { Schema, Model, Document } from 'mongoose';
+import mongoose from 'mongoose';
 
-export interface IBroadcastMessage extends Document {
-  subject: string;
-  body: string;
-  urgent?: boolean;
-  createdBy: mongoose.Types.ObjectId;
-  createdAt: Date;
-  recipients: mongoose.Types.ObjectId[]; // store all employee ids at time of send
-}
+const { Schema } = mongoose;
 
-const BroadcastMessageSchema = new Schema<IBroadcastMessage>(
+const BroadcastMessageSchema = new Schema(
   {
-    subject: { type: String, required: true, trim: true, maxlength: 200 },
-    body: { type: String, required: true, trim: true },
-    urgent: { type: Boolean, default: false },
-    createdBy: { type: Schema.Types.ObjectId, ref: 'Employee', required: true },
-    recipients: [{ type: Schema.Types.ObjectId, ref: 'Employee', required: true }],
+    subject: { type: String, required: true, trim: true },
+    body:    { type: String, required: true, trim: true },
+    urgent:  { type: Boolean, default: false },
+
+    createdBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'Employee',
+      required: true,
+    },
+
+    recipients: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: 'Employee',
+        required: true,
+      }
+    ],
   },
-  { timestamps: { createdAt: true, updatedAt: false } }
+  { timestamps: true }
 );
 
-const BroadcastMessage: Model<IBroadcastMessage> =
-  mongoose.models.BroadcastMessage || mongoose.model<IBroadcastMessage>('BroadcastMessage', BroadcastMessageSchema);
-
-export default BroadcastMessage;
+// IMPORTANT on Next.js/Vercel to avoid OverwriteModelError
+export default mongoose.models.BroadcastMessage
+  || mongoose.model('BroadcastMessage', BroadcastMessageSchema);
