@@ -4,45 +4,83 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 export default function AdminLogin() {
+  const router = useRouter();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const router = useRouter();
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  async function handleSubmit(e: React.FormEvent) {
+  const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
+    setError(null);
+    setSubmitting(true);
 
-    const res = await fetch('/api/admin/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    });
+    try {
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
 
-    if (res.ok) {
-      router.push('/admin/dashboard'); // ✅ cookie is already set
-    } else {
       const data = await res.json();
-      setError(data.error || 'Login failed');
+
+      if (!res.ok || !data?.admin?._id) {
+        setError(data?.error || 'Invalid credentials');
+        setSubmitting(false);
+        return;
+      }
+
+      // ✅ Save for client-side fetch headers
+      localStorage.setItem(
+        'employee',
+        JSON.stringify({ id: data.admin._id, name: data.admin.name ?? 'Admin' })
+      );
+
+      // (optional) cookie so server routes can also read it
+      document.cookie = `employeeId=${data.admin._id}; path=/; SameSite=Lax`;
+
+      router.push('/admin/dashboard');
+    } catch (err: any) {
+      setError(err?.message || 'Login failed');
+      setSubmitting(false);
     }
-  }
+  };
 
   return (
-    <form onSubmit={handleSubmit}>
-      <h2>Admin Login</h2>
+    <form onSubmit={onSubmit}>
+      <label htmlFor="username">Admin Login</label>
       <input
+        id="username"
+        name="username"
+        autoComplete="username"
+        placeholder="Admin username"
         value={username}
         onChange={(e) => setUsername(e.target.value)}
-        placeholder="Username"
+        disabled={submitting}
+        required
       />
+
       <input
+        id="password"
+        name="password"
         type="password"
+        autoComplete="current-password"
+        placeholder="••••"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
-        placeholder="Password"
+        disabled={submitting}
+        required
       />
-      <button type="submit">Login</button>
-      {error && <p style={{ color: 'red' }}>{error}</p>}
+
+      <button type="submit" disabled={submitting}>
+        {submitting ? 'Signing in…' : 'Login'}
+      </button>
+
+      {error && (
+        <div style={{ marginTop: 12, color: '#f87171', fontWeight: 600 }}>
+          {error}
+        </div>
+      )}
     </form>
   );
 }
