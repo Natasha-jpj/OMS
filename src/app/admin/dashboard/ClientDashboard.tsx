@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Calendar from 'react-calendar';
@@ -662,20 +662,129 @@ export default function AdminDashboard() {
   const [exportEnd, setExportEnd] = useState<string>('');     // yyyy-mm-dd
   const [exporting, setExporting] = useState(false);
 
+  // Attendance sub-view (new)
+  type AttendanceView = 'all' | 'checkin' | 'checkout' | 'paired';
+  const [attendanceView, setAttendanceView] = useState<AttendanceView>('all');
+
   const router = useRouter();
   const { toasts, show, remove } = useToasts();
 
   useEffect(() => { fetchData(); }, []);
+
+  // Enrich attendance with fallback name (if API didn't populate)
+  const enrichedAttendance = useMemo(
+    () =>
+      attendance.map((r) => ({
+        ...r,
+        employeeName:
+          r.employeeName ||
+          employees.find((e) => e._id === r.employeeId)?.name ||
+          '',
+      })),
+    [attendance, employees]
+  );
+
+  // --- SEARCH: name, id, and date (supports combined tokens like "john 2025-10-04") ---
+  function dateVariants(tsISO: string): string[] {
+    const d = new Date(tsISO);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+
+    const iso = `${y}-${m}-${dd}`; // 2025-10-04
+    const dmy = `${dd}-${m}-${y}`; // 04-10-2025
+    const mdy = `${m}-${dd}-${y}`; // 10-04-2025
+
+    // Localized human formats
+    const local = d.toLocaleDateString();
+    const shortText = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); // Oct 4, 2025
+    const longText = d.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });   // October 4, 2025
+
+    return [iso, dmy, mdy, local, shortText, longText].map(s => s.toLowerCase());
+  }
+
   useEffect(() => {
-    if (searchTerm) {
-      setFilteredAttendance(attendance.filter((r) =>
-        r.employeeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        r.employeeId.toLowerCase().includes(searchTerm.toLowerCase())
-      ));
-    } else {
-      setFilteredAttendance(attendance);
+    const base = enrichedAttendance;
+
+    if (!searchTerm.trim()) {
+      setFilteredAttendance(base);
+      return;
     }
-  }, [searchTerm, attendance]);
+
+    const tokens = searchTerm
+      .toLowerCase()
+      .split(/\s+/)
+      .map((t) => t.trim())
+      .filter(Boolean);
+
+    const next = base.filter((r) => {
+      const name = (r.employeeName || '').toLowerCase();
+      const id = (r.employeeId || '').toLowerCase();
+      const dates = dateVariants(r.timestamp);
+
+      // every token must match name OR id OR any date representation
+      return tokens.every((t) => {
+        if (name.includes(t)) return true;
+        if (id.includes(t)) return true;
+        return dates.some((ds) => ds.includes(t));
+      });
+    });
+
+    setFilteredAttendance(next);
+  }, [searchTerm, enrichedAttendance]);
+
+  // Derive the current list for the simple views
+  const viewAttendance = useMemo(() => {
+    if (attendanceView === 'checkin') return filteredAttendance.filter(r => r.type === 'checkin');
+    if (attendanceView === 'checkout') return filteredAttendance.filter(r => r.type === 'checkout');
+    return filteredAttendance; // 'all'
+  }, [filteredAttendance, attendanceView]);
+
+  // Build "paired" rows from the *filtered* attendance
+  type PairedRow = {
+    key: string;
+    employeeId: string;
+    employeeName: string;
+    date: string; // yyyy-mm-dd
+    firstCheckIn?: AttendanceRecord;
+    lastCheckOut?: AttendanceRecord;
+  };
+
+  const pairedRows = useMemo<PairedRow[]>(() => {
+    const map = new Map<string, PairedRow>();
+    for (const r of filteredAttendance) {
+      const dateKey = new Date(r.timestamp).toISOString().split('T')[0]; // yyyy-mm-dd
+      const key = `${r.employeeId}__${dateKey}`;
+      const existing =
+        map.get(key) ||
+        ({
+          key,
+          employeeId: r.employeeId,
+          employeeName: r.employeeName,
+          date: dateKey,
+        } as PairedRow);
+
+      if (r.type === 'checkin') {
+        if (!existing.firstCheckIn || new Date(r.timestamp) < new Date(existing.firstCheckIn.timestamp)) {
+          existing.firstCheckIn = r;
+        }
+      } else {
+        if (!existing.lastCheckOut || new Date(r.timestamp) > new Date(existing.lastCheckOut.timestamp)) {
+          existing.lastCheckOut = r;
+        }
+      }
+      existing.employeeName = existing.employeeName || r.employeeName;
+      map.set(key, existing);
+    }
+    const rows = Array.from(map.values());
+    rows.sort((a, b) => {
+      const tA = new Date(a.date).getTime();
+      const tB = new Date(b.date).getTime();
+      if (tA !== tB) return tB - tA; // latest date first
+      return (a.employeeName || '').localeCompare(b.employeeName || '');
+    });
+    return rows;
+  }, [filteredAttendance]);
 
   const fetchData = async () => {
     setError(null);
@@ -797,7 +906,7 @@ export default function AdminDashboard() {
           }
         }
       } catch { /* swallow */ }
-           cursor.setUTCDate(cursor.getUTCDate() + 1);
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
     }
     return results;
   }
@@ -1281,57 +1390,112 @@ export default function AdminDashboard() {
         {activeTab === 'attendance' && (
           <section className="card">
             <div className="card-header">
-              <h2>Attendance Records ({filteredAttendance.length})</h2>
+              <h2>Attendance Records ({attendanceView === 'paired' ? pairedRows.length : viewAttendance.length})</h2>
               <button onClick={exportToCSV} className="btn success">Export to CSV</button>
+            </div>
+
+            {/* Sub-tabs for attendance view */}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+              {(['all', 'checkin', 'checkout', 'paired'] as const).map(v => (
+                <button
+                  key={v}
+                  onClick={() => setAttendanceView(v)}
+                  className={`btn ${attendanceView === v ? 'primary' : 'secondary'} small`}
+                >
+                  {v === 'all' ? 'All' : v === 'checkin' ? 'Check-ins' : v === 'checkout' ? 'Check-outs' : 'Paired (cols)'}
+                </button>
+              ))}
             </div>
 
             <div className="field">
               <input
                 type="text"
-                placeholder="Search by employee name or ID..."
+                placeholder="Search by employee name, ID, or date (e.g., 2025-10-04, Oct 4, 2025)…"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="input"
               />
             </div>
 
-            {filteredAttendance.length === 0 ? (
-              <div className="empty">{searchTerm ? 'No matching records found' : 'No attendance records found'}</div>
-            ) : (
-              <div className="table-wrap trello-table">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Employee</th>
-                      <th>Employee ID</th>
-                      <th>Type</th>
-                      <th>Date & Time</th>
-                      <th>Image</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredAttendance.map((record) => (
-                      <tr key={record._id}>
-                        <td>{record.employeeName}</td>
-                        <td>{record.employeeId}</td>
-                        <td>
-                          <span className={`badge ${record.type === 'checkin' ? 'badge-green' : 'badge-red'}`}>
-                            {record.type.toUpperCase()}
-                          </span>
-                        </td>
-                        <td>{new Date(record.timestamp).toLocaleString()}</td>
-                        <td>
-                          {record.imageData ? (
-                            <button onClick={() => viewImage(record)} className="btn primary small">View Image</button>
-                          ) : (
-                            <span className="muted">No image</span>
-                          )}
-                        </td>
+            {/* Standard list views */}
+            {attendanceView !== 'paired' ? (
+              (viewAttendance.length === 0 ? (
+                <div className="empty">{searchTerm ? 'No matching records found' : 'No attendance records found'}</div>
+              ) : (
+                <div className="table-wrap trello-table">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Employee</th>
+                        <th>Employee ID</th>
+                        <th>Type</th>
+                        <th>Date & Time</th>
+                        <th>Image</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {viewAttendance.map((record) => (
+                        <tr key={record._id}>
+                          <td>{record.employeeName}</td>
+                          <td>{record.employeeId}</td>
+                          <td>
+                            <span className={`badge ${record.type === 'checkin' ? 'badge-green' : 'badge-red'}`}>
+                              {record.type.toUpperCase()}
+                            </span>
+                          </td>
+                          <td>{new Date(record.timestamp).toLocaleString()}</td>
+                          <td>
+                            {record.imageData ? (
+                              <button onClick={() => viewImage(record)} className="btn primary small">View Image</button>
+                            ) : (
+                              <span className="muted">No image</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))
+            ) : (
+              // Paired (columns) view
+              (pairedRows.length === 0 ? (
+                <div className="empty">{searchTerm ? 'No matching records found' : 'No attendance records found'}</div>
+              ) : (
+                <div className="table-wrap trello-table">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Employee</th>
+                        <th>Employee ID</th>
+                        <th>Date</th>
+                        <th>First Check-in</th>
+                        <th>Last Check-out</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pairedRows.map((row) => (
+                        <tr key={row.key}>
+                          <td>{row.employeeName}</td>
+                          <td>{row.employeeId}</td>
+                          <td>{new Date(row.date).toLocaleDateString()}</td>
+                          <td>{row.firstCheckIn ? new Date(row.firstCheckIn.timestamp).toLocaleTimeString() : '—'}</td>
+                          <td>{row.lastCheckOut ? new Date(row.lastCheckOut.timestamp).toLocaleTimeString() : '—'}</td>
+                          <td>
+                            {row.firstCheckIn?.imageData && (
+                              <button onClick={() => viewImage(row.firstCheckIn!)} className="btn small">View In</button>
+                            )}{' '}
+                            {row.lastCheckOut?.imageData && (
+                              <button onClick={() => viewImage(row.lastCheckOut!)} className="btn small">View Out</button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))
             )}
           </section>
         )}
@@ -1433,7 +1597,7 @@ export default function AdminDashboard() {
           </section>
         )}
 
-              {/* Employees */}
+        {/* Employees */}
         {activeTab === 'employees' && (
           <section className="card">
             <div className="card-header">
@@ -1861,7 +2025,7 @@ export default function AdminDashboard() {
                                 : 'badge-gray'
                             }`}>{t.status}</span>
                           </td>
-                          <td>{new Date(t.dueDate).toLocaleDateString()}</td>
+                                                  <td>{new Date(t.dueDate).toLocaleDateString()}</td>
                           <td className="table-actions">
                             <button onClick={() => startEditingTask(t)} className="btn info small">Edit</button>
                             <button onClick={() => handleDeleteTask(t._id)} className="btn danger small">Delete</button>
@@ -2086,4 +2250,3 @@ export default function AdminDashboard() {
     </div>
   );
 }
-
