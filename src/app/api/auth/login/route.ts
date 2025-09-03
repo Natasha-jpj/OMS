@@ -11,14 +11,12 @@ export async function POST(request: NextRequest) {
   try {
     await dbConnect();
 
-const { email, password } = await request.json();
-const normalizedEmail = String(email).trim().toLowerCase();
-
+    const { email, password } = await request.json();
     if (!email || !password) {
       return NextResponse.json({ error: 'Email and password required' }, { status: 400 });
     }
 
-const employeeDoc = await Employee.findOne({ email: String(email).trim().toLowerCase() }).populate('role');
+    const employeeDoc = await Employee.findOne({ email }).populate('role');
     if (!employeeDoc) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
     }
@@ -82,4 +80,3 @@ const employeeDoc = await Employee.findOne({ email: String(email).trim().toLower
     );
   }
 }
-export const runtime = "nodejs";
